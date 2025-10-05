@@ -8,12 +8,16 @@ from pathlib import Path
 
 from .config import EngineConfig
 from .scene import SceneManager
-from .godot_bridge import GodotBridge
 from .physics import PhysicsEngine
 from .scripting import ScriptManager
 from .input import InputManager
 from .time import TimeManager
-from .asset import AssetManager
+
+# Import runtime modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from runtime.renderer import Renderer
+from runtime.asset import AssetManager
 
 
 logger = logging.getLogger(__name__)
@@ -24,25 +28,24 @@ class EngineCore:
     
     def __init__(self, config: EngineConfig):
         self.config = config
-        self.godot_bridge: Optional[GodotBridge] = None
+        self.renderer: Optional[Renderer] = None
         self.scene_manager: Optional[SceneManager] = None
         self.asset_manager: Optional[AssetManager] = None
         self.physics_engine: Optional[PhysicsEngine] = None
         self.script_manager: Optional[ScriptManager] = None
         self.input_manager: Optional[InputManager] = None
         self.time_manager: Optional[TimeManager] = None
-        self.renderer = None
         self.is_initialized = False
         self.is_playing = False
         self.is_running = True
         
-    def initialize(self):
+    def initialize(self, gl_context=None):
         """Initialize engine subsystems"""
         logger.info("Initializing PolyForge Engine...")
         
-        # Initialize Godot bridge
-        self.godot_bridge = GodotBridge(self.config)
-        self.godot_bridge.initialize()
+        # Initialize renderer with moderngl context
+        if gl_context:
+            self.renderer = Renderer(gl_context)
         
         # Initialize scene manager
         self.scene_manager = SceneManager(self)
@@ -51,7 +54,7 @@ class EngineCore:
         self.asset_manager = AssetManager()
         self.asset_manager.scan_assets()
         
-        # Initialize physics engine
+        # Initialize physics engine with pybullet
         self.physics_engine = PhysicsEngine()
         
         # Initialize script manager
@@ -70,8 +73,8 @@ class EngineCore:
         """Shutdown engine subsystems"""
         logger.info("Shutting down engine...")
         
-        if self.godot_bridge:
-            self.godot_bridge.shutdown()
+        if self.physics_engine:
+            self.physics_engine.shutdown()
         
         self.is_initialized = False
         logger.info("Engine shutdown complete")
@@ -84,21 +87,14 @@ class EngineCore:
         
         logger.info("Starting play mode...")
         self.is_playing = True
-        if self.godot_bridge:
-            self.godot_bridge.start_runtime()
     
     def stop(self):
         """Stop runtime/play mode"""
         logger.info("Stopping play mode...")
         self.is_playing = False
-        if self.godot_bridge:
-            self.godot_bridge.stop_runtime()
     
     def update(self, delta_time: float):
         """Update engine (called each frame)"""
-        if self.is_playing and self.godot_bridge:
-            self.godot_bridge.update(delta_time)
-        
         if not self.is_playing:
             return
         
@@ -111,3 +107,23 @@ class EngineCore:
             self.physics_engine.update(self.scene_manager, self.time_manager.fixed_delta_time)
         
         self.input_manager.update()
+    
+    def render(self, view_matrix, projection_matrix):
+        """Render the scene"""
+        if not self.renderer or not self.scene_manager:
+            return
+        
+        self.renderer.clear()
+        
+        # Render all entities with mesh components
+        for entity in self.scene_manager.get_all_entities():
+            if 'mesh' in entity.components:
+                mesh_component = entity.components['mesh']
+                if hasattr(mesh_component, 'mesh_handle') and mesh_component.mesh_handle:
+                    model_matrix = entity.transform.get_matrix()
+                    self.renderer.render_mesh(
+                        mesh_component.mesh_handle,
+                        model_matrix,
+                        view_matrix,
+                        projection_matrix
+                    )
